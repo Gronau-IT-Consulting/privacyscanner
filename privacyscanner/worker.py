@@ -11,11 +11,6 @@ from multiprocessing.connection import wait
 import psutil
 import psycopg2
 
-try:
-    import raven
-    has_raven = True
-except ModuleNotFoundError:
-    has_raven = False
 
 from privacyscanner.exceptions import RetryScan, RescheduleLater
 from privacyscanner.filehandlers import NoOpFileHandler
@@ -102,7 +97,7 @@ class WorkerInfo:
 class WorkerMaster:
     def __init__(self, db_dsn, scan_module_list, scan_module_options=None,
                  max_tries=3, num_workers=2, max_executions=100,
-                 max_execution_times=None, raven_dsn=None):
+                 max_execution_times=None):
         self.name = socket.gethostname()
         self._db_dsn = db_dsn
         self.scan_module_list = scan_module_list
@@ -116,7 +111,6 @@ class WorkerMaster:
             max_execution_times = {None: None}
         self.max_execution_times = max_execution_times
         self.max_execution_time = max_execution_times.get(None)
-        self._raven_dsn = raven_dsn
         self._workers = {}
         self._worker_ids = set(range(num_workers))
         self._terminated_worker_pids = set()
@@ -171,7 +165,7 @@ class WorkerMaster:
             read_pipe, write_pipe = multiprocessing.Pipe(duplex=False)
             args = (worker_id, ppid, self._db_dsn, self.scan_module_list,
                     self.scan_module_options, self.max_tries, self.max_executions,
-                    write_pipe, stop_event, ack_event, self._raven_dsn)
+                    write_pipe, stop_event, ack_event)
             process = WorkerProcess(target=_spawn_worker, args=args)
             process.start()
             worker_info = WorkerInfo(worker_id, process, read_pipe, stop_event, ack_event)
@@ -279,8 +273,7 @@ def _spawn_worker(*args, **kwargs):
 
 class Worker:
     def __init__(self, worker_id, ppid, db_dsn, scan_module_list, scan_module_options,
-                 max_tries, max_executions, write_pipe, stop_event, ack_event,
-                 raven_dsn):
+                 max_tries, max_executions, write_pipe, stop_event, ack_event ):
         self._id = worker_id
         self._pid = os.getpid()
         self._ppid = ppid
@@ -290,9 +283,7 @@ class Worker:
         self._ack_event = ack_event
         self._old_sigterm = signal.SIG_DFL
         self._old_sigint = signal.SIG_DFL
-        self._raven_client = None
-        if has_raven and raven_dsn:
-            self._raven_client = raven.Client(raven_dsn)
+
         self._job_queue = JobQueue(db_dsn, load_modules(scan_module_list),
                                    scan_module_options, max_tries)
 
@@ -332,11 +323,6 @@ class Worker:
                     logger.exception('Scan module `{}` failed.'.format(job.scan_module.name))
                     self._job_queue.report_failure()
                     self._notify_master('job_failed', (datetime.today(), ))
-                    if self._raven_client:
-                        self._raven_client.captureException(tags={
-                            'scan_id': job.scan_id,
-                            'scan_module_name': job.scan_module.name
-                        }, extra={'result': result.get_results()})
                 else:
                     self._job_queue.report_result(result.get_updates())
                     self._notify_master('job_finished', (datetime.today(), ))

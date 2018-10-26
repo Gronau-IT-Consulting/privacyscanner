@@ -5,5 +5,4 @@ SCAN_MODULES = ['privacyscanner.scanmodules.network', 'privacyscanner.scanmodule
                 'privacyscanner.scanmodules.serverleaks']
 NUM_WORKERS = 2
 MAX_EXECUTIONS = 100
-RAVEN_DSN = None
 MAX_TRIES = 3
